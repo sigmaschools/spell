@@ -1,0 +1,288 @@
+<!doctype html>
+<!-- Copyright 2026 Sigma. SPDX-License-Identifier: Apache-2.0 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Spell</title>
+<style>
+  :root { color-scheme: light dark; --mark: #b4005a; --ok: #1a7f37; --muted: #6b6b6b; }
+  @media (prefers-color-scheme: dark) { :root { --mark: #ff7ab8; --ok: #56d364; --muted: #9a9a9a; } }
+  body { font: 22px/1.5 system-ui, sans-serif; max-width: 680px; margin: 8vh auto; padding: 0 24px; }
+  h1 { font-size: 1.6em; margin: 0 0 .4em; }
+  button { font: inherit; padding: 8px 18px; border-radius: 8px; border: 1px solid currentColor; background: none; color: inherit; cursor: pointer; }
+  button.primary { background: #2f5bd3; border-color: #2f5bd3; color: #fff; }
+  input { font: inherit; font-size: 1.3em; padding: 8px 12px; width: 12em; max-width: 100%; border-radius: 8px; border: 2px solid var(--muted); }
+  .hidden { display: none; }
+  .muted { color: var(--muted); }
+  .sentence { font-size: 1.1em; margin: .6em 0 1em; }
+  .blank { display: inline-block; min-width: 4em; border-bottom: 2px solid currentColor; }
+  .shown { font-size: 2.4em; letter-spacing: .04em; margin: .2em 0; }
+  .shown mark { background: none; color: var(--mark); text-decoration: underline; text-underline-offset: .15em; }
+  .wrote { text-decoration: line-through; }
+  .right { font-weight: 600; min-height: 1.5em; }
+  .right.ok { color: var(--ok); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  form { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  ul { padding-left: 1.2em; }
+</style>
+<script src="compass-app.js"></script>
+<script src="words.js"></script>
+<script src="spell.js"></script>
+</head>
+<body>
+  <!-- Before the set: one tap starts it (a browser speaks only after a tap). -->
+  <section id="start">
+    <h1>Spell</h1>
+    <p id="intro"></p>
+    <button id="go" class="primary">Start</button>
+  </section>
+
+  <!-- Nothing owed today (only seen when opened outside a plan). -->
+  <section id="rest" class="hidden">
+    <h1>Spell</h1>
+    <p id="rest-text"></p>
+  </section>
+
+  <!-- No speech on this device: Spell can't say the words. -->
+  <section id="no-speech" class="hidden">
+    <h1>Spell</h1>
+    <p>This device can't speak words aloud, so Spell can't run here. Ask a guide to turn on speech.</p>
+  </section>
+
+  <section id="word" class="hidden">
+    <p id="progress" class="muted"></p>
+    <p id="lead"></p>
+    <p id="shown" class="shown hidden"></p>
+    <p id="sentence" class="sentence"></p>
+    <form id="form">
+      <input id="answer" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Type the word">
+      <button class="primary">Check</button>
+      <button type="button" id="hear">Hear again</button>
+    </form>
+    <p id="right" class="right" aria-live="polite"></p>
+  </section>
+
+  <!-- The end screen; compass.json's doneWhen matches it. -->
+  <section id="finished" class="hidden">
+    <h1>Finished</h1>
+    <p id="score"></p>
+    <div id="practise"></div>
+    <p id="learned" class="muted"></p>
+  </section>
+
+<script>
+"use strict";
+const compass = CompassApp.launch({ appVersion: "0.1.0" });
+const B = Spell.bank(SPELL_GROUPS);
+const record = Spell.readRecord(compass.state) || null;
+const today = compass.today;
+const $ = (id) => document.getElementById(id);
+const show = (id) => {
+  for (const s of document.querySelectorAll("body > section")) s.classList.toggle("hidden", s.id !== id);
+};
+
+// What to do today. A plan that names parts without "set" owes nothing.
+const owed = !compass.parts || compass.parts.includes("set");
+const work = Spell.plan(record, B, today);
+const rec = record || { v: 1, w: {} };
+
+if (!owed || !work.steps.length) {
+  const next = Spell.nextDue(rec, B, today);
+  $("rest-text").textContent = `Nothing to spell today. Your next words come on ${new Date(next + "T12:00:00").toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}.`;
+  show("rest");
+} else {
+  const n = work.steps.filter((s) => s.kind !== "learn").length;
+  $("intro").textContent = work.placement
+    ? "Listen to each word and type it. This first set finds where to start, so some words may be new. Do your best."
+    : `${n} words today. Listen to each word, then type it.`;
+}
+
+// Speech: the word, the sentence, then the word again.
+let voice = null;
+function pickVoice() {
+  const vs = speechSynthesis.getVoices().filter((v) => /^en(-|_|$)/i.test(v.lang));
+  voice = vs.find((v) => v.localService && /en-US/i.test(v.lang)) || vs.find((v) => v.localService) || vs[0] || null;
+}
+if ("speechSynthesis" in window) {
+  pickVoice();
+  speechSynthesis.addEventListener?.("voiceschanged", pickVoice);
+}
+function say(w) {
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(`${w.word}. ${w.sentence} ${w.word}.`);
+  if (voice) u.voice = voice;
+  u.rate = 0.85;
+  speechSynthesis.speak(u);
+}
+
+function marked(w) {
+  const p = document.createElement("span");
+  for (const part of w.parts) {
+    const el = document.createElement(part.mark ? "mark" : "span");
+    el.textContent = part.text;
+    p.appendChild(el);
+  }
+  return p;
+}
+function sentenceWithBlank(w) {
+  const frag = document.createDocumentFragment();
+  const i = w.sentence.toLowerCase().indexOf(w.word.toLowerCase());
+  frag.append(w.sentence.slice(0, i));
+  const blank = document.createElement("span");
+  blank.className = "blank";
+  blank.appendChild(Object.assign(document.createElement("span"), { className: "sr", textContent: "blank" }));
+  frag.append(blank, w.sentence.slice(i + w.word.length));
+  return frag;
+}
+
+// The set runs as a queue of steps. A miss adds a correction (copy the word
+// while looking at it) and a retest from memory a few steps later. Only the
+// first attempt at each word is scored.
+const steps = work.steps.slice();
+const items = [];
+const missed = [];
+const retests = {};
+let at = 0;
+let probeMisses = 0;
+let mode = null; // "ask" | "learn" | "correct"
+let shownAt = 0;
+let busy = false; // the short pause after "Right": input is ignored
+const started = Date.now();
+
+function current() {
+  return steps[at];
+}
+
+function render(m, wrote) {
+  mode = m;
+  const step = current();
+  const w = B.words[step.key];
+  const scored = steps.filter((s) => s.kind !== "learn" && s.kind !== "retest").length;
+  const done = steps.slice(0, at).filter((s) => s.kind !== "learn" && s.kind !== "retest").length;
+  // Placement stops early, so its length is not known in advance.
+  $("progress").textContent = work.placement ? `Word ${done + 1}` : `Word ${Math.min(done + 1, scored)} of ${scored}`;
+  $("right").textContent = "";
+  $("shown").replaceChildren();
+  $("sentence").replaceChildren(sentenceWithBlank(w));
+  if (m === "ask") {
+    $("lead").textContent = step.kind === "retest" ? "Try this one again from memory." : "Listen, then type the word.";
+    $("shown").classList.add("hidden");
+  } else {
+    if (m === "learn") {
+      $("lead").textContent = "A new word. Look at the marked letters, then type it while you look.";
+    } else {
+      $("lead").replaceChildren("Not quite. You wrote ", Object.assign(document.createElement("span"), { className: "wrote", textContent: wrote || "nothing" }), ". Type it while you look.");
+    }
+    $("shown").appendChild(marked(w));
+    $("shown").classList.remove("hidden");
+  }
+  $("answer").value = "";
+  $("answer").readOnly = false;
+  busy = false;
+  $("answer").focus();
+  shownAt = Date.now();
+  say(w);
+}
+
+function next() {
+  at++;
+  if (at >= steps.length) return finish();
+  const k = current().kind;
+  render(k === "learn" ? "learn" : "ask");
+}
+
+function addRetest(key) {
+  retests[key] = (retests[key] || 0) + 1;
+  if (retests[key] > 2) return; // two more tries today is enough; tomorrow brings it back
+  // From memory means other words first. With too few left (near the end of
+  // a set, or when placement stops), skip it: the word comes back tomorrow.
+  if (steps.length - (at + 1) < 2) return;
+  steps.splice(Math.min(steps.length, at + 1 + Spell.RETEST_GAP), 0, { kind: "retest", key });
+}
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (busy) return;
+  const step = current();
+  const w = B.words[step.key];
+  const answer = $("answer").value;
+  if (!answer.trim()) return say(w); // Enter on an empty box says it again
+  const ok = Spell.same(answer, w.word);
+
+  if (mode === "learn" || mode === "correct") {
+    // Copying from sight: must match before moving on; not scored.
+    if (!ok) {
+      $("right").className = "right";
+      $("right").textContent = "Look closely at each letter and try again.";
+      $("answer").select();
+      return;
+    }
+    if (mode === "correct") addRetest(step.key);
+    return next();
+  }
+
+  if (step.kind !== "retest") {
+    items.push({ prompt: w.word, answer: answer.trim(), correct: ok, ms: Date.now() - shownAt });
+    Spell.score(rec, B, step, ok, today);
+    if (!ok) {
+      missed.push(w.word);
+      if (step.kind === "probe" && ++probeMisses >= Spell.PROBE_MISSES) {
+        // Placement has found where to start: drop the probes still to come.
+        for (let i = steps.length - 1; i > at; i--) if (steps[i].kind === "probe") steps.splice(i, 1);
+      }
+    }
+  }
+  if (ok) {
+    // Keep the box focused but read-only, so a second Enter does nothing and
+    // an iPad keeps its keyboard up for the next word.
+    busy = true;
+    $("answer").readOnly = true;
+    $("right").className = "right ok";
+    $("right").textContent = "Right";
+    setTimeout(next, 700);
+    return;
+  }
+  render("correct", answer.trim());
+});
+
+// Tapping a button must not take focus from the box (an iPad would close
+// its keyboard).
+for (const b of document.querySelectorAll("#form button")) b.addEventListener("pointerdown", (e) => e.preventDefault());
+
+$("hear").addEventListener("click", () => {
+  say(B.words[current().key]);
+  $("answer").focus();
+});
+
+$("go").addEventListener("click", () => {
+  if (!("speechSynthesis" in window)) return show("no-speech");
+  show("word");
+  render(current().kind === "learn" ? "learn" : "ask");
+});
+
+function finish() {
+  speechSynthesis.cancel();
+  const right = items.filter((i) => i.correct).length;
+  // Report the finished set, then the record, then show the end screen.
+  compass.finishPart({
+    part: "set",
+    title: work.placement ? "Spelling: finding a starting point" : "Spelling set",
+    items,
+    seconds: Math.round((Date.now() - started) / 1000),
+  });
+  compass.saveState(JSON.stringify(rec), { set: Spell.nextDue(rec, B, today) });
+
+  $("score").textContent = `${right} of ${items.length} right first time.`;
+  if (missed.length) {
+    const list = document.createElement("ul");
+    for (const m of [...new Set(missed)]) list.appendChild(Object.assign(document.createElement("li"), { textContent: m }));
+    $("practise").replaceChildren(Object.assign(document.createElement("p"), { textContent: "These come back tomorrow:" }), list);
+  }
+  const learned = Spell.learnedCount(rec);
+  $("learned").textContent = learned ? `Words learned so far: ${learned}.` : "";
+  show("finished");
+}
+</script>
+</body>
+</html>

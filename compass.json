@@ -1,0 +1,20 @@
+{
+  "slug": "spell",
+  "name": "Spell",
+  "kind": "first-party",
+  "launchUrl": "https://sigmaschools.github.io/spell/",
+  "allowedHosts": ["sigmaschools.github.io"],
+  "signIn": "none",
+  "doneWhen": { "selector": "#finished" },
+  "awayAfterSeconds": 120,
+  "masteryPercent": 85,
+  "xp": {
+    "unit": "set",
+    "rate": 2,
+    "scoreBands": [
+      { "fromPercent": 85, "share": 1 },
+      { "fromPercent": 70, "share": 0.5 }
+    ]
+  },
+  "aiContext": "A spelling app. It starts on a screen with a Start button. Each word is spoken aloud with a sentence; the screen shows the sentence with a blank, a text box, Check and Hear again. A right answer shows Right. A wrong one shows 'Not quite. You wrote …' with the struck-out attempt and the correct word in large letters, its tricky letters underlined, and the student types it while looking; the word is asked again from memory a few words later. A new word is first shown in large letters to copy, then asked from memory later. The end screen says Finished and how many words were right first time."
+}
