@@ -1,7 +1,7 @@
 // Copyright 2026 Sigma
 // SPDX-License-Identifier: Apache-2.0
 
-// compass-app.js: the Compass app kit for the browser (app contract 1.0).
+// compass-app.js: the Compass app kit for the browser (app contract 1).
 //
 // Optional. An app can write its reports by hand; this file only makes them
 // hard to get wrong. No dependencies, no network, no storage, nothing to set
@@ -87,6 +87,22 @@
     return typeof v === "number" && v >= 0 && Math.floor(v) === v;
   }
 
+  // A real calendar day, YYYY-MM-DD (not 2026-02-30).
+  function isDay(s) {
+    if (typeof s !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+    var d = new Date(s + "T00:00:00Z");
+    return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  }
+
+  // A UTC or offset time such as 2026-11-10T14:00:00Z.
+  function isTime(s) {
+    return typeof s === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:\d{2})$/.test(s) && !isNaN(Date.parse(s));
+  }
+
+  function isAmount(v) {
+    return typeof v === "number" && isFinite(v) && v >= 0;
+  }
+
   function launch(options) {
     var href = (options && options.url) || (global.location ? global.location.href : "");
     var params = new URL(href, "http://localhost/").searchParams;
@@ -94,6 +110,9 @@
     var partsParam = params.get("compass_parts");
     var today = params.get("compass_today");
     var appVersion = (options && options.appVersion) || undefined;
+    if (appVersion !== undefined && (typeof appVersion !== "string" || appVersion.length > 64)) {
+      throw problem("launch: appVersion must be text of at most 64 characters");
+    }
 
     if (contract !== null && contract !== CONTRACT) {
       problem("this page was launched under app contract " + contract + "; this kit follows " + CONTRACT);
@@ -122,22 +141,34 @@
        * part is fully finished, never for a part stopped early.
        */
       finishPart: function (p) {
-        if (!p || typeof p.part !== "string" || p.part === "") {
-          throw problem("finishPart needs a part name");
+        if (!p || typeof p.part !== "string" || p.part === "" || p.part.length > 100) {
+          throw problem("finishPart needs a part name of at most 100 characters");
         }
         if (finished[p.part]) {
           return null; // already reported in this visit
         }
         var report = { kind: "part", part: p.part, status: "finished" };
-        if (p.title !== undefined) report.title = String(p.title);
+        if (p.title !== undefined) {
+          if (String(p.title).length > 200) throw problem("finishPart: title is at most 200 characters");
+          report.title = String(p.title);
+        }
         var items = p.items || null;
         var correct = p.correct;
         var wrong = p.wrong;
         if (items) {
+          if (items.length === 0) {
+            // An empty list is almost always a bug, and a part with no right
+            // or wrong answers earns the full rate: leave items out on purpose.
+            throw problem("finishPart: items is empty; leave it out for a part with no questions");
+          }
+          if (items.length > 500) throw problem("finishPart: at most 500 items");
           for (var i = 0; i < items.length; i++) {
             var it = items[i];
-            if (!it || typeof it.prompt !== "string" || typeof it.correct !== "boolean") {
-              throw problem("finishPart: item " + i + " needs a prompt (text) and correct (true or false)");
+            if (!it || typeof it.prompt !== "string" || it.prompt.length > 500 || typeof it.correct !== "boolean") {
+              throw problem("finishPart: item " + i + " needs a prompt (text, at most 500 characters) and correct (true or false)");
+            }
+            if (it.ms !== undefined && !isAmount(it.ms)) {
+              throw problem("finishPart: item " + i + " ms must be a number, 0 or more");
             }
           }
           if (correct === undefined) correct = items.filter(function (x) { return x.correct; }).length;
@@ -153,7 +184,7 @@
           report.wrong = wrong;
         }
         if (p.seconds !== undefined) {
-          if (typeof p.seconds !== "number" || p.seconds < 0) throw problem("finishPart: seconds must be 0 or more");
+          if (!isAmount(p.seconds)) throw problem("finishPart: seconds must be a number, 0 or more");
           report.seconds = Math.round(p.seconds * 10) / 10;
         }
         if (appVersion) report.appVersion = appVersion;
@@ -177,8 +208,8 @@
         var report = { kind: "state", data: data };
         if (due) {
           for (var k in due) {
-            if (Object.prototype.hasOwnProperty.call(due, k) && !/^\d{4}-\d{2}-\d{2}$/.test(due[k])) {
-              throw problem("saveState: due date for " + k + " must be YYYY-MM-DD");
+            if (Object.prototype.hasOwnProperty.call(due, k) && !isDay(due[k])) {
+              throw problem("saveState: due date for " + k + " must be a real day, YYYY-MM-DD");
             }
           }
           report.due = due;
@@ -192,10 +223,16 @@
        * value, course?, setAt, history? }. Keep it on every signed-in screen.
        */
       reportLevel: function (l) {
-        if (!l || (l.scale !== "lexile" && l.scale !== "course") || typeof l.value !== "number" || typeof l.setAt !== "string") {
-          throw problem("reportLevel needs scale (lexile or course), a number value and setAt");
+        if (!l || (l.scale !== "lexile" && l.scale !== "course") || typeof l.value !== "number" || !isFinite(l.value) || !isTime(l.setAt)) {
+          throw problem("reportLevel needs scale (lexile or course), a number value and setAt (a time such as 2026-11-10T14:00:00Z)");
         }
-        var report = { kind: "level", scale: l.scale, value: l.value, setAt: l.setAt, history: l.history || [] };
+        var hist = l.history || [];
+        for (var h = 0; h < hist.length; h++) {
+          if (!hist[h] || typeof hist[h].value !== "number" || !isFinite(hist[h].value) || !isTime(hist[h].setAt)) {
+            throw problem("reportLevel: history entry " + h + " needs a number value and setAt");
+          }
+        }
+        var report = { kind: "level", scale: l.scale, value: l.value, setAt: l.setAt, history: hist };
         if (l.subject) report.subject = l.subject;
         if (l.course) report.course = l.course;
         if (appVersion) report.appVersion = appVersion;
