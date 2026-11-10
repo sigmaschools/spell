@@ -161,7 +161,11 @@ function render(m, wrote) {
   const scored = steps.filter((s) => s.kind !== "learn" && s.kind !== "retest").length;
   const done = steps.slice(0, at).filter((s) => s.kind !== "learn" && s.kind !== "retest").length;
   // Placement stops early, so its length is not known in advance.
-  $("progress").textContent = work.placement ? `Word ${done + 1}` : `Word ${Math.min(done + 1, scored)} of ${scored}`;
+  // A retest or a new word to copy isn't scored, so it doesn't take a number:
+  // the count moves only with the words that are.
+  const unscored = step.kind === "retest" ? "Once more" : step.kind === "learn" ? "New word" : null;
+  $("progress").textContent =
+    unscored ?? (work.placement ? `Word ${done + 1}` : `Word ${Math.min(done + 1, scored)} of ${scored}`);
   $("right").textContent = "";
   $("shown").replaceChildren();
   $("sentence").replaceChildren(sentenceWithBlank(w));
