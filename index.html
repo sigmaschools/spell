@@ -20,7 +20,9 @@
   .shown { font-size: 2.4em; letter-spacing: .04em; margin: .2em 0; }
   .shown mark { background: none; color: var(--mark); text-decoration: underline; text-underline-offset: .15em; }
   .wrote { text-decoration: line-through; }
-  .right { color: var(--ok); font-weight: 600; min-height: 1.5em; }
+  .right { font-weight: 600; min-height: 1.5em; }
+  .right.ok { color: var(--ok); }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
   form { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
   ul { padding-left: 1.2em; }
 </style>
@@ -129,7 +131,7 @@ function sentenceWithBlank(w) {
   frag.append(w.sentence.slice(0, i));
   const blank = document.createElement("span");
   blank.className = "blank";
-  blank.setAttribute("aria-label", "blank");
+  blank.appendChild(Object.assign(document.createElement("span"), { className: "sr", textContent: "blank" }));
   frag.append(blank, w.sentence.slice(i + w.word.length));
   return frag;
 }
@@ -145,6 +147,7 @@ let at = 0;
 let probeMisses = 0;
 let mode = null; // "ask" | "learn" | "correct"
 let shownAt = 0;
+let busy = false; // the short pause after "Right": input is ignored
 const started = Date.now();
 
 function current() {
@@ -175,6 +178,8 @@ function render(m, wrote) {
     $("shown").classList.remove("hidden");
   }
   $("answer").value = "";
+  $("answer").readOnly = false;
+  busy = false;
   $("answer").focus();
   shownAt = Date.now();
   say(w);
@@ -182,10 +187,6 @@ function render(m, wrote) {
 
 function next() {
   at++;
-  // Placement stops once it has found enough words to start on.
-  if (work.placement && probeMisses >= Spell.PROBE_MISSES) {
-    while (at < steps.length && steps[at].kind === "probe") at++;
-  }
   if (at >= steps.length) return finish();
   const k = current().kind;
   render(k === "learn" ? "learn" : "ask");
@@ -194,11 +195,15 @@ function next() {
 function addRetest(key) {
   retests[key] = (retests[key] || 0) + 1;
   if (retests[key] > 2) return; // two more tries today is enough; tomorrow brings it back
+  // From memory means other words first. With too few left (near the end of
+  // a set, or when placement stops), skip it: the word comes back tomorrow.
+  if (steps.length - (at + 1) < 2) return;
   steps.splice(Math.min(steps.length, at + 1 + Spell.RETEST_GAP), 0, { kind: "retest", key });
 }
 
 $("form").addEventListener("submit", (e) => {
   e.preventDefault();
+  if (busy) return;
   const step = current();
   const w = B.words[step.key];
   const answer = $("answer").value;
@@ -208,6 +213,7 @@ $("form").addEventListener("submit", (e) => {
   if (mode === "learn" || mode === "correct") {
     // Copying from sight: must match before moving on; not scored.
     if (!ok) {
+      $("right").className = "right";
       $("right").textContent = "Look closely at each letter and try again.";
       $("answer").select();
       return;
@@ -221,16 +227,28 @@ $("form").addEventListener("submit", (e) => {
     Spell.score(rec, B, step, ok, today);
     if (!ok) {
       missed.push(w.word);
-      if (step.kind === "probe") probeMisses++;
+      if (step.kind === "probe" && ++probeMisses >= Spell.PROBE_MISSES) {
+        // Placement has found where to start: drop the probes still to come.
+        for (let i = steps.length - 1; i > at; i--) if (steps[i].kind === "probe") steps.splice(i, 1);
+      }
     }
   }
   if (ok) {
+    // Keep the box focused but read-only, so a second Enter does nothing and
+    // an iPad keeps its keyboard up for the next word.
+    busy = true;
+    $("answer").readOnly = true;
+    $("right").className = "right ok";
     $("right").textContent = "Right";
     setTimeout(next, 700);
     return;
   }
   render("correct", answer.trim());
 });
+
+// Tapping a button must not take focus from the box (an iPad would close
+// its keyboard).
+for (const b of document.querySelectorAll("#form button")) b.addEventListener("pointerdown", (e) => e.preventDefault());
 
 $("hear").addEventListener("click", () => {
   say(B.words[current().key]);

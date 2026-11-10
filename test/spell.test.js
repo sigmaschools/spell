@@ -110,3 +110,22 @@ test("answers ignore case, outer spaces and curly apostrophes", () => {
   assert.ok(Spell.same(" Rain ", "rain"));
   assert.ok(!Spell.same("rane", "rain"));
 });
+
+test("placement: only the probed word counts as a right day; the rest are untested", () => {
+  const rec = { v: 1, w: {} };
+  Spell.score(rec, B, { kind: "probe", key: "ai.2" }, true, "2026-11-10");
+  assert.equal(rec.w["ai.2"][0], 1);
+  for (const i of [0, 1, 3, 4, 5, 6, 7]) assert.equal(rec.w[`ai.${i}`][0], 0);
+});
+
+test("look-alike groups stay apart even when placement touched both", () => {
+  // Missed probes open dbl and drop; drop must still wait for dbl.
+  const rec = { v: 1, w: {} };
+  for (const g of ["ai", "ee", "igh"]) SPELL_GROUPS.find((x) => x.id === g).words.forEach((_, i) => (rec.w[`${g}.${i}`] = [3, 9999]));
+  Spell.score(rec, B, { kind: "probe", key: "dbl.2" }, false, "2026-11-10");
+  Spell.score(rec, B, { kind: "probe", key: "drop.2" }, false, "2026-11-10");
+  const p = Spell.plan(rec, B, "2026-11-11");
+  const groups = new Set(p.steps.filter((s) => s.kind === "learn").map((s) => B.words[s.key].group));
+  assert.ok(!groups.has("drop"), [...groups].join(","));
+  assert.ok(groups.has("dbl"));
+});

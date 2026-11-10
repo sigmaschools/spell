@@ -82,8 +82,9 @@
     const out = [];
     for (const g of b.groups) {
       if (out.length >= count) break;
+      // A look-alike group waits even when placement already touched it.
+      if (g.apart && !settled(record, b, g.apart)) continue;
       const started = g.words.some((_, i) => record.w[`${g.id}.${i}`]);
-      if (!started && g.apart && !settled(record, b, g.apart)) continue;
       for (let i = 0; i < g.words.length && out.length < count; i++) {
         if (!record.w[`${g.id}.${i}`]) out.push(`${g.id}.${i}`);
       }
@@ -149,15 +150,15 @@
     const t = dayNum(today);
     const w = record.w[step.key] || [0, t];
     if (step.kind === "probe" && correct) {
-      // Right on placement: the group is likely known. Its words come back
-      // as reviews over the next weeks, so knowing them is shown on later
-      // days, never assumed.
+      // Right on placement: the group is likely known. Its other words come
+      // back as reviews spread over the next four weeks, untested so far
+      // (streak 0), so knowing them is shown on later days, never assumed.
       const g = b.words[step.key].group;
-      b.groups
-        .find((x) => x.id === g)
-        .words.forEach((_, i) => {
-          record.w[`${g}.${i}`] = [1, t + 2 + ((i * 3) % 12)];
-        });
+      const gi = b.groups.findIndex((x) => x.id === g);
+      b.groups[gi].words.forEach((_, i) => {
+        record.w[`${g}.${i}`] = [0, t + 2 + (((gi * 8 + i) * 11) % 28)];
+      });
+      record.w[step.key] = [1, t + INTERVALS[1]];
       return;
     }
     if (step.kind === "test" || !correct) {
